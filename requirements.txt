@@ -1,0 +1,12 @@
+langchain==0.1.0
+langchain-openai==0.0.5
+langchain-community==0.0.10
+chromadb==0.4.22
+pandas==2.1.4
+numpy==1.26.3
+python-dotenv==1.0.0
+streamlit==1.29.0
+plotly==5.18.0
+groq==0.9.0
+plaid-python==16.0.0
+httpx==0.24.1
