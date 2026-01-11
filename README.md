@@ -9,8 +9,9 @@ Built with:
 - Streamlit
 - Python
 
-### To run:
+## To run:
 python -m venv venv
 source venv/bin/activate 
 pip install -r requirements.txt
 streamlit run app.py
+
