@@ -1,5 +1,6 @@
 """
 Personal Finance Advisor with Plaid Bank Integration
+Pre-configured with Groq (FREE)
 """
 import streamlit as st
 import pandas as pd
@@ -9,6 +10,7 @@ import os
 from categorizer import TransactionCategorizer
 from advisor_agent import FinancialAdvisorAgent
 from plaid_connector import PlaidConnector
+from csv_processor import SmartCSVProcessor
 
 # Import simple version
 import sys
@@ -35,6 +37,10 @@ if 'plaid_connector' not in st.session_state:
     st.session_state.plaid_connector = None
 if 'plaid_link_token' not in st.session_state:
     st.session_state.plaid_link_token = None
+if 'csv_processor' not in st.session_state:
+    st.session_state.csv_processor = SmartCSVProcessor()
+if 'just_uploaded' not in st.session_state:
+    st.session_state.just_uploaded = False
 
 # Title
 st.title("💰 Personal Finance Advisor")
@@ -220,40 +226,81 @@ with st.sidebar:
     st.divider()
     
     # Manual CSV Upload (as fallback)
-    st.subheader("📁 Manual Upload")
-    st.caption("Or upload CSV manually")
+    st.subheader("📁 Upload Your Bank CSV")
+    st.caption("Works with ANY bank CSV format - we'll figure it out!")
     
-    uploaded_file = st.file_uploader("Upload CSV", type=['csv'])
+    uploaded_file = st.file_uploader(
+        "Upload CSV", 
+        type=['csv'],
+        help="Upload a CSV from any bank. We'll automatically detect the columns and combine all relevant info."
+    )
     
     if uploaded_file:
         try:
-            df = pd.read_csv(uploaded_file)
+            # Use smart processor to handle any CSV format
+            with st.spinner("🔍 Analyzing CSV format..."):
+                df_raw = pd.read_csv(uploaded_file)
+                
+                # Preview what columns we detected
+                preview = st.session_state.csv_processor.preview_mapping(df_raw)
+                
+                with st.expander("🔍 Column Detection (click to see)"):
+                    st.write("**Detected Columns:**")
+                    st.write(f"📅 Date: `{preview['date_column']}`")
+                    st.write(f"💰 Amount: `{preview['amount_column']}`")
+                    st.write(f"📝 Description: `{', '.join(preview['description_columns'])}`")
+                    st.caption(f"All columns in your CSV: {', '.join(preview['all_columns'])}")
+                
+                # Process the CSV
+                df = st.session_state.csv_processor.process_csv(df_raw)
+                st.success(f"✅ Detected {len(df)} transactions from your CSV!")
+                
+            # Show a preview
+            with st.expander("👀 Preview (first 5 transactions)"):
+                st.dataframe(df.head(), use_container_width=True)
             
-            required_cols = ['date', 'description', 'amount']
-            if not all(col in df.columns for col in required_cols):
-                st.error(f"CSV must have: {', '.join(required_cols)}")
-            else:
-                df['date'] = pd.to_datetime(df['date'])
+            # Categorize with AI
+            with st.spinner("🤖 AI is categorizing your transactions... This may take a minute..."):
+                transactions = df.to_dict('records')
+                categorized = st.session_state.categorizer.categorize_batch(transactions)
+                st.session_state.transactions_df = pd.DataFrame(categorized)
                 
-                with st.spinner("Categorizing with Groq AI..."):
-                    transactions = df.to_dict('records')
-                    categorized = st.session_state.categorizer.categorize_batch(transactions)
-                    st.session_state.transactions_df = pd.DataFrame(categorized)
+                # Update advisor
+                if st.session_state.advisor is None:
+                    st.session_state.advisor = FinancialAdvisorAgent(
+                        st.session_state.transactions_df,
+                        provider="groq"
+                    )
+                else:
+                    st.session_state.advisor.update_transactions(
+                        st.session_state.transactions_df
+                    )
+            
+            st.success(f"🎉 All set! {len(df)} transactions categorized and ready to analyze!")
+            
+            # Set flag to scroll to chat
+            st.session_state.just_uploaded = True
+            
+            # Auto scroll by rerunning
+            st.rerun()
+                
+        except ValueError as e:
+            st.error(f"❌ CSV Format Issue: {str(e)}")
+            st.info("💡 **Tip:** Make sure your CSV has columns for date, amount, and description (they can have different names)")
+            
+            with st.expander("📋 See what columns we found"):
+                try:
+                    df_raw = pd.read_csv(uploaded_file)
+                    st.write("**Your CSV columns:**")
+                    st.write(list(df_raw.columns))
+                    st.write("**First row:**")
+                    st.write(df_raw.iloc[0].to_dict())
+                except:
+                    pass
                     
-                    if st.session_state.advisor is None:
-                        st.session_state.advisor = FinancialAdvisorAgent(
-                            st.session_state.transactions_df,
-                            provider="groq"
-                        )
-                    else:
-                        st.session_state.advisor.update_transactions(
-                            st.session_state.transactions_df
-                        )
-                
-                st.success(f"✅ Loaded {len(df)} transactions!")
-                
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"❌ Error processing CSV: {str(e)}")
+            st.info("💡 Try checking that your CSV is properly formatted")
     
     # Sample data
     st.divider()
@@ -307,13 +354,24 @@ with st.sidebar:
 if st.session_state.transactions_df is not None:
     df = st.session_state.transactions_df
     
+    # Show welcome message if just uploaded
+    if st.session_state.just_uploaded:
+        st.balloons()
+        st.success(f"🎉 **Ready to analyze {len(df)} transactions!** Ask me anything about your finances below.")
+        st.session_state.just_uploaded = False
+    
     # Chat input MUST be outside tabs - Streamlit limitation
     st.subheader("💬 Ask Your Financial Advisor")
     
     # Use text input + button instead of chat_input (which can't be in tabs)
     col1, col2 = st.columns([5, 1])
     with col1:
-        user_question = st.text_input("Ask a question about your finances:", key="question_input", label_visibility="collapsed", placeholder="What are my top spending categories?")
+        user_question = st.text_input(
+            "Ask a question about your finances:", 
+            key="question_input", 
+            label_visibility="collapsed", 
+            placeholder="What are my top spending categories?"
+        )
     with col2:
         ask_button = st.button("Ask", type="primary", use_container_width=True)
     
