@@ -10,7 +10,7 @@ import os
 from categorizer import TransactionCategorizer
 from advisor_agent import FinancialAdvisorAgent
 from plaid_connector import PlaidConnector
-from csv_processor import SmartCSVProcessor
+from smart_csv_processor import SmartCSVProcessor
 
 # Import simple version
 import sys
@@ -226,44 +226,77 @@ with st.sidebar:
     st.divider()
     
     # Manual CSV Upload (as fallback)
-    st.subheader("📁 Upload Your Bank CSV")
-    st.caption("Works with ANY bank CSV format - we'll figure it out!")
+    st.subheader("📁 Upload Your Bank CSV(s)")
+    st.caption("Upload one or multiple CSVs - we'll combine them all!")
     
-    uploaded_file = st.file_uploader(
-        "Upload CSV", 
+    uploaded_files = st.file_uploader(
+        "Upload CSV file(s)", 
         type=['csv'],
-        help="Upload a CSV from any bank. We'll automatically detect the columns and combine all relevant info."
+        accept_multiple_files=True,
+        help="Upload CSVs from any bank(s). You can upload multiple files at once - we'll combine them!"
     )
     
-    if uploaded_file:
+    if uploaded_files:
         try:
-            # Use smart processor to handle any CSV format
-            with st.spinner("🔍 Analyzing CSV format..."):
-                df_raw = pd.read_csv(uploaded_file)
-                
-                # Preview what columns we detected
-                preview = st.session_state.csv_processor.preview_mapping(df_raw)
-                
-                with st.expander("🔍 Column Detection (click to see)"):
-                    st.write("**Detected Columns:**")
-                    st.write(f"📅 Date: `{preview['date_column']}`")
-                    st.write(f"💰 Amount: `{preview['amount_column']}`")
-                    st.write(f"📝 Description: `{', '.join(preview['description_columns'])}`")
-                    st.caption(f"All columns in your CSV: {', '.join(preview['all_columns'])}")
-                
-                # Process the CSV
-                df = st.session_state.csv_processor.process_csv(df_raw)
-                st.success(f"✅ Detected {len(df)} transactions from your CSV!")
-                
+            all_dfs = []
+            
+            # Process each uploaded file
+            for i, uploaded_file in enumerate(uploaded_files):
+                with st.spinner(f"🔍 Processing file {i+1}/{len(uploaded_files)}: {uploaded_file.name}..."):
+                    df_raw = pd.read_csv(uploaded_file)
+                    
+                    # Preview what columns we detected
+                    preview = st.session_state.csv_processor.preview_mapping(df_raw)
+                    
+                    with st.expander(f"🔍 {uploaded_file.name} - Column Detection"):
+                        st.write(f"**File:** {uploaded_file.name}")
+                        st.write(f"📅 Date: `{preview['date_column']}`")
+                        st.write(f"💰 Amount: `{preview['amount_column']}`")
+                        st.write(f"📝 Description: `{', '.join(preview['description_columns'])}`")
+                        st.caption(f"Columns: {', '.join(preview['all_columns'])}")
+                    
+                    # Process the CSV
+                    df = st.session_state.csv_processor.process_csv(df_raw)
+                    
+                    # Add source file name
+                    df['source_file'] = uploaded_file.name
+                    
+                    all_dfs.append(df)
+                    st.success(f"✅ {uploaded_file.name}: {len(df)} transactions")
+            
+            # Combine all DataFrames
+            combined_df = pd.concat(all_dfs, ignore_index=True)
+            
+            # Remove duplicates based on date, description, and amount
+            original_count = len(combined_df)
+            combined_df = combined_df.drop_duplicates(subset=['date', 'description', 'amount'], keep='first')
+            duplicates_removed = original_count - len(combined_df)
+            
+            if duplicates_removed > 0:
+                st.info(f"ℹ️ Removed {duplicates_removed} duplicate transactions")
+            
+            # Sort by date
+            combined_df = combined_df.sort_values('date', ascending=False).reset_index(drop=True)
+            
+            st.success(f"🎉 Combined total: {len(combined_df)} unique transactions from {len(uploaded_files)} file(s)!")
+            
             # Show a preview
-            with st.expander("👀 Preview (first 5 transactions)"):
-                st.dataframe(df.head(), use_container_width=True)
+            with st.expander("👀 Preview (first 10 transactions from all files)"):
+                preview_df = combined_df[['date', 'description', 'amount', 'source_file']].head(10)
+                st.dataframe(preview_df, use_container_width=True)
             
             # Categorize with AI
-            with st.spinner("🤖 AI is categorizing your transactions... This may take a minute..."):
-                transactions = df.to_dict('records')
+            with st.spinner("🤖 AI is categorizing all your transactions... This may take a few minutes..."):
+                # Remove source_file before categorizing (add it back after)
+                source_files = combined_df['source_file'].copy()
+                df_to_categorize = combined_df.drop('source_file', axis=1)
+                
+                transactions = df_to_categorize.to_dict('records')
                 categorized = st.session_state.categorizer.categorize_batch(transactions)
                 st.session_state.transactions_df = pd.DataFrame(categorized)
+                
+                # Add source_file back
+                st.session_state.transactions_df['source_file'] = source_files.values
                 
                 # Update advisor
                 if st.session_state.advisor is None:
@@ -276,7 +309,13 @@ with st.sidebar:
                         st.session_state.transactions_df
                     )
             
-            st.success(f"🎉 All set! {len(df)} transactions categorized and ready to analyze!")
+            st.success(f"🎉 All set! {len(combined_df)} transactions categorized and ready to analyze!")
+            
+            # Show breakdown by file
+            with st.expander("📊 Transaction count by file"):
+                file_counts = st.session_state.transactions_df['source_file'].value_counts()
+                for file_name, count in file_counts.items():
+                    st.write(f"**{file_name}**: {count} transactions")
             
             # Set flag to scroll to chat
             st.session_state.just_uploaded = True
@@ -290,17 +329,22 @@ with st.sidebar:
             
             with st.expander("📋 See what columns we found"):
                 try:
-                    df_raw = pd.read_csv(uploaded_file)
-                    st.write("**Your CSV columns:**")
-                    st.write(list(df_raw.columns))
-                    st.write("**First row:**")
-                    st.write(df_raw.iloc[0].to_dict())
+                    for uploaded_file in uploaded_files:
+                        df_raw = pd.read_csv(uploaded_file)
+                        st.write(f"**{uploaded_file.name} columns:**")
+                        st.write(list(df_raw.columns))
+                        st.write("**First row:**")
+                        st.write(df_raw.iloc[0].to_dict())
+                        st.divider()
                 except:
                     pass
                     
         except Exception as e:
             st.error(f"❌ Error processing CSV: {str(e)}")
             st.info("💡 Try checking that your CSV is properly formatted")
+            import traceback
+            with st.expander("🔍 Error details"):
+                st.code(traceback.format_exc())
     
     # Sample data
     st.divider()
