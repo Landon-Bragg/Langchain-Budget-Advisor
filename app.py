@@ -603,13 +603,6 @@ else:
     
     with col2:
         st.markdown("""
-        ### 🏦 Plaid Setup (Next Step)
-        
-        1. **Sign up**: [dashboard.plaid.com/signup](https://dashboard.plaid.com/signup)
-        2. **Get credentials**: Free sandbox keys
-        3. **Update .env**: Add client_id and secret
-        4. **Test**: Use sandbox banks (Chase, USAA)
-        5. **Go live**: Request production access
         
         ### Supported Banks:
         ✅ Chase (USAA)  
